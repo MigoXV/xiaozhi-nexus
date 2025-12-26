@@ -47,6 +47,8 @@ class Outgoing:
 
 
 @router.websocket("/ws")
+@router.websocket("/xiaozhi/v1")
+@router.websocket("/xiaozhi/v1/")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
 
