@@ -10,9 +10,74 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from xiaozhi_nexus.audio.opus import OpusDecoder, OpusEncoder
 from xiaozhi_nexus.runtime.session import StreamSession
 from xiaozhi_nexus.inferencers.stream_asr import OpenAIRealtimeASRInferencer
-from xiaozhi_nexus.stubs.tts import SineWaveTTS
+from xiaozhi_nexus.inferencers.chat import OpenAIChatInferencer
+from xiaozhi_nexus.inferencers.tts import OpenAITTSInferencer
+from xiaozhi_nexus.config import get_config
 
 router = APIRouter()
+
+
+def _create_chat_inferencer() -> OpenAIChatInferencer | None:
+    """
+    从全局配置创建 Chat 推理器
+
+    Returns:
+        OpenAIChatInferencer 实例，如果未配置 API Key 则返回 None
+    """
+    cfg = get_config()
+
+    api_key = cfg.openai.api_key
+    if not api_key:
+        return None
+
+    return OpenAIChatInferencer(
+        base_url=cfg.openai.base_url,
+        api_key=api_key,
+        model=cfg.openai.model,
+        temperature=cfg.llm.temperature,
+        max_tokens=cfg.llm.max_tokens,
+        max_history=cfg.llm.max_history,
+        system_prompt=cfg.system.prompt,
+        verify_ssl=cfg.openai.verify_ssl,
+    )
+
+
+def _create_tts_inferencer(sample_rate: int) -> OpenAITTSInferencer:
+    """从全局配置创建 TTS 推理器"""
+    cfg = get_config()
+
+    # TTS 配置回退到 OpenAI 配置
+    base_url = cfg.tts.base_url or cfg.openai.base_url
+    api_key = cfg.tts.api_key or cfg.openai.api_key
+
+    return OpenAITTSInferencer(
+        base_url=base_url,
+        api_key=api_key,
+        model=cfg.tts.model,
+        voice=cfg.tts.voice,
+        response_format=cfg.tts.response_format,
+        output_sample_rate=sample_rate,
+        chunk_duration_ms=cfg.tts.chunk_duration_ms,
+        verify_ssl=cfg.tts.verify_ssl,
+    )
+
+
+def _create_asr_inferencer(sample_rate: int) -> OpenAIRealtimeASRInferencer:
+    """从全局配置创建 ASR 推理器"""
+    cfg = get_config()
+
+    # ASR 配置回退到 OpenAI 配置
+    base_url = cfg.asr.base_url or cfg.openai.base_url
+    api_key = cfg.asr.api_key or cfg.openai.api_key
+
+    return OpenAIRealtimeASRInferencer(
+        base_url=base_url,
+        api_key=api_key,
+        model=cfg.asr.model,
+        sample_rate=sample_rate,
+        chunk_duration_ms=cfg.asr.chunk_duration_ms,
+        verify_ssl=cfg.asr.verify_ssl,
+    )
 
 
 @dataclass(frozen=True)
@@ -124,17 +189,21 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     state = payload.get("state")
                     if state == "start":
                         listening = True
-                        if session is None:
+                        # 如果已有 session 且正在运行，触发中断（用户打断）
+                        if session is not None:
+                            session.interrupt()
+                        else:
+                            # 创建新的 session
                             if not decoder or not audio_params:
                                 continue
                             session = StreamSession(
                                 publish_json=publish_json,
                                 publish_bytes=publish_bytes,
-                                inferencer=OpenAIRealtimeASRInferencer(
-                                    sample_rate=audio_params.sample_rate,
-                                    verify_ssl=False,
+                                asr_inferencer=_create_asr_inferencer(
+                                    audio_params.sample_rate
                                 ),
-                                tts=SineWaveTTS(sample_rate=encoder.sample_rate),
+                                chat_inferencer=_create_chat_inferencer(),
+                                tts=_create_tts_inferencer(encoder.sample_rate),
                                 encoder=encoder,
                             )
                             session.start()

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import ssl
 import base64
 import asyncio
@@ -29,8 +28,8 @@ class OpenAIRealtimeASRInferencer:
     """
 
     # OpenAI 配置
-    base_url: str = field(default_factory=lambda: os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
-    api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
     model: str = "gpt-4o-realtime-preview"
 
     # 音频配置
@@ -210,7 +209,7 @@ class OpenAIRealtimeASRInferencer:
         # 从队列中读取结果
         while True:
             try:
-                result = result_queue.get(timeout=60)  # 60秒超时
+                result = result_queue.get(timeout=60000)  # 60秒超时
                 if result is None:
                     break
                 if isinstance(result, Exception):
@@ -231,8 +230,8 @@ class OpenAIRealtimeASRInferencerAsync:
     """
 
     # OpenAI 配置
-    base_url: str = field(default_factory=lambda: os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
-    api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
     model: str = "gpt-4o-realtime-preview"
 
     # 音频配置

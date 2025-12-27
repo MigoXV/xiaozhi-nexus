@@ -1,0 +1,51 @@
+# xiaozhi-nexus 配置文件示例
+# 复制此文件为 config.yaml 并根据需要修改配置
+
+# OpenAI API 配置 (必需)
+openai:
+  base_url: https://api.openai.com/v1
+  api_key: sk-your-api-key-here  # 必填
+  model: gpt-4o
+  verify_ssl: true
+
+# LLM 生成参数配置
+llm:
+  temperature: 0.7
+  max_tokens: 1024
+  max_history: 20  # 保留的最大历史对话轮数
+
+# TTS 配置 (可选，不配置则回退到 openai 配置)
+tts:
+  # base_url: null  # 不设置则使用 openai.base_url
+  # api_key: null   # 不设置则使用 openai.api_key
+  model: fnlp/MOSS-TTSD-v0.5
+  voice: fnlp/MOSS-TTSD-v0.5:anna
+  response_format: wav
+  # output_sample_rate: null  # 不设置则使用原始采样率
+  chunk_duration_ms: 100
+  verify_ssl: true
+
+# ASR 配置 (可选，不配置则回退到 openai 配置)
+asr:
+  # base_url: null  # 不设置则使用 openai.base_url
+  # api_key: null   # 不设置则使用 openai.api_key
+  model: gpt-4o-realtime-preview
+  sample_rate: 16000
+  chunk_duration_ms: 100
+  verify_ssl: true
+
+# 系统配置
+system:
+  # System Prompt 配置 (二选一)
+  # 方式一: 直接指定 prompt 内容
+  prompt: 你是小智，一个有帮助的语音助手。请用简洁友好的方式回答用户的问题。
+  # 方式二: 从文件加载 (优先级更高)
+  # prompt_file: /path/to/system_prompt.txt
+
+  # Opus 库路径 (通常不需要设置)
+  # opus_lib: /path/to/libopus.so
+
+# 服务器配置
+server:
+  host: 127.0.0.1
+  port: 8000

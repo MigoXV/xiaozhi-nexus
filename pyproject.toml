@@ -20,11 +20,11 @@ dependencies = [
     "librosa (>=0.11.0,<0.12.0)",
     "scipy (<1.16)",
     "opuslib (>=3.0.1,<4.0.0)",
-    "python-dotenv (>=1.2.1,<2.0.0)"
+    "omegaconf (>=2.3.0,<3.0.0)"
 ]
 
 [project.scripts]
-xiaozhi-nexus = "xiaozhi_nexus.cli:main"
+xiaozhi-nexus = "xiaozhi_nexus.commands.app:main"
 
 [tool.poetry]
 packages = [{include = "xiaozhi_nexus", from = "src"}]
