@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -150,7 +151,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         try:
             outgoing.put_nowait(msg)
         except asyncio.QueueFull:
-            pass
+            logging.warning("Outgoing queue full (2000), audio packets may be dropped!")
 
     def publish_json(payload: dict[str, Any]) -> None:
         loop.call_soon_threadsafe(_enqueue, Outgoing(kind="json", payload=payload))
@@ -196,6 +197,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                             # 创建新的 session
                             if not decoder or not audio_params:
                                 continue
+                            cfg = get_config()
                             session = StreamSession(
                                 publish_json=publish_json,
                                 publish_bytes=publish_bytes,
@@ -205,6 +207,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                                 chat_inferencer=_create_chat_inferencer(),
                                 tts=_create_tts_inferencer(encoder.sample_rate),
                                 encoder=encoder,
+                                allow_interrupt=cfg.system.allow_interrupt,
+                                audio_send_delay_ms=cfg.tts.audio_send_delay_ms,
+                                tts_split_by_punctuation=cfg.tts.split_by_punctuation,
                             )
                             session.start()
                         continue

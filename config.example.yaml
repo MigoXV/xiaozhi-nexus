@@ -45,6 +45,9 @@ system:
   # Opus 库路径 (通常不需要设置)
   # opus_lib: /path/to/libopus.so
 
+  # 是否允许用户打断 (当用户开始新的语音输入时，中断当前的 LLM 生成和 TTS 播放)
+  allow_interrupt: true
+
 # 服务器配置
 server:
   host: 127.0.0.1

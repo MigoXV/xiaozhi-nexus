@@ -7,7 +7,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Optional
-
+import logging
 import typer
 
 from xiaozhi_nexus.config import (
@@ -22,6 +22,12 @@ app = typer.Typer(
     add_completion=False,
 )
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger(__name__)
 
 def _load_and_validate_config(config_path: Optional[Path]) -> None:
     """加载并验证配置"""
