@@ -42,6 +42,12 @@ class TTSConfig:
     chunk_duration_ms: int = 100
     verify_ssl: bool = True
 
+    # 音频包发送延时（毫秒），用于控制发送速度接近实时播放，0 表示不延时
+    audio_send_delay_ms: float = 15.0
+
+    # 是否按标点符号分段进行 TTS 合成（分段可以加快首包响应，但可能影响语音连贯性）
+    split_by_punctuation: bool = True
+
 
 @dataclass
 class ASRConfig:
@@ -65,6 +71,9 @@ class SystemConfig:
 
     # Opus 库路径
     opus_lib: Optional[str] = None
+
+    # 是否允许用户打断（当用户开始新的语音输入时，中断当前的 LLM 生成和 TTS 播放）
+    allow_interrupt: bool = True
 
 
 @dataclass
