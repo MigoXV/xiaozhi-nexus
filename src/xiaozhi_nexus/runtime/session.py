@@ -159,7 +159,7 @@ class StreamSession:
 
         full_response = ""
         try:
-            for chunk in self.chat_inferencer(user_text):
+            for chunk in self.chat_inferencer.stream_chat(user_text):
                 if self._is_interrupted():
                     self.publish_json(
                         {"type": "llm", "state": "stop", "interrupted": True}
@@ -237,7 +237,7 @@ class StreamSession:
                         # 添加延时，控制发送速度接近实时播放
                         if self.audio_send_delay_ms > 0:
                             time.sleep(self.audio_send_delay_ms / 1000.0)
-
+                time.sleep(2)
                 logger.info(f"TTS sentence[{sentence_idx}] end: {sentence} (sent {packet_count} packets)")
 
             logger.info("TTS stop (completed)")

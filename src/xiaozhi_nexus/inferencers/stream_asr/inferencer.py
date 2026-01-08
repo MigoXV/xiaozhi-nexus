@@ -3,6 +3,7 @@ from __future__ import annotations
 import ssl
 import base64
 import asyncio
+import logging
 import threading
 from queue import Queue, Empty
 from dataclasses import dataclass, field
@@ -12,7 +13,11 @@ import numpy as np
 from openai import AsyncOpenAI
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
 
+from ..utils import format_text_for_log, audio_duration_seconds
+
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,6 +43,12 @@ class OpenAIRealtimeASRInferencer:
 
     # SSL 配置
     verify_ssl: bool = True
+
+    # WebSocket 配置
+    ws_ping_interval: Optional[float] = 20.0
+    ws_ping_timeout: Optional[float] = 3600.0
+    ws_close_timeout: Optional[float] = 3600.0
+
 
     # 内部状态
     _client: Optional[AsyncOpenAI] = field(default=None, init=False, repr=False)
@@ -79,22 +90,35 @@ class OpenAIRealtimeASRInferencer:
         # 启动流式转录
         await connection.send({"type": "response.create", "response": {}})
 
+        total_samples = 0
+
         async for chunk in audio_iter:
             chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
             if chunk.size == 0:
                 continue
 
+            total_samples += int(chunk.size)
+
             # 转换为 PCM16 并编码
             pcm16_data = self._float32_to_pcm16(chunk)
             audio_base64 = self._pcm16_to_base64(pcm16_data)
 
-            await connection.send({
-                "type": "input_audio_buffer.append",
-                "audio": audio_base64,
-            })
+            await connection.send(
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": audio_base64,
+                }
+            )
 
             # 小延迟模拟实时音频流，避免发送过快
             await asyncio.sleep(0.01)
+
+        duration_s = audio_duration_seconds(total_samples, self.sample_rate)
+        logger.info(
+            "ASR input audio duration_s=%.3f sample_rate=%d",
+            duration_s,
+            self.sample_rate,
+        )
 
         # 发送结束标记
         await connection.send({"type": "input_audio_buffer.commit"})
@@ -128,7 +152,9 @@ class OpenAIRealtimeASRInferencer:
             elif event_type == "error":
                 raise RuntimeError(f"OpenAI Realtime API error: {event}")
 
-    async def astream(self, audio_iter: AsyncIterator[np.ndarray]) -> AsyncIterator[str]:
+    async def astream(
+        self, audio_iter: AsyncIterator[np.ndarray]
+    ) -> AsyncIterator[str]:
         """
         异步流式 ASR 推理
 
@@ -141,23 +167,47 @@ class OpenAIRealtimeASRInferencer:
         if self._client is None:
             raise RuntimeError("Client not initialized")
 
-        websocket_options = {}
+        websocket_options = {
+            "ping_interval": self.ws_ping_interval,
+            "ping_timeout": self.ws_ping_timeout,
+            "close_timeout": self.ws_close_timeout,
+        }
         if self._ssl_context is not None:
             websocket_options["ssl"] = self._ssl_context
 
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
         async with self._client.beta.realtime.connect(
             model=self.model,
-            websocket_connection_options=websocket_options,
+            websocket_connection_options={
+                "ssl": ssl_context,
+                "ping_interval": self.ws_ping_interval,
+                "ping_timeout": self.ws_ping_timeout,
+                "close_timeout": self.ws_close_timeout,
+            },
         ) as connection:
             # 创建发送任务
             send_task = asyncio.create_task(
                 self._send_audio_stream(connection, audio_iter)
             )
 
+            transcripts: list[str] = []
+
             try:
                 # 接收并 yield 转录结果
                 async for transcript in self._receive_transcripts(connection):
+                    transcripts.append(transcript)
                     yield transcript
+
+                full_text = "".join(transcripts)
+                output_preview, output_len = format_text_for_log(full_text)
+                logger.info(
+                    "ASR output text_len=%d text=%s",
+                    output_len,
+                    output_preview,
+                )
             finally:
                 send_task.cancel()
                 try:
@@ -180,8 +230,22 @@ class OpenAIRealtimeASRInferencer:
 
         async def _async_wrapper():
             """异步包装器，将同步迭代器转换为异步"""
+
             async def async_audio_iter() -> AsyncIterator[np.ndarray]:
-                for chunk in audio_iter:
+                loop = asyncio.get_running_loop()
+                iterator = iter(audio_iter)
+                sentinel = object()
+
+                def _next_chunk():
+                    try:
+                        return next(iterator)
+                    except StopIteration:
+                        return sentinel
+
+                while True:
+                    chunk = await loop.run_in_executor(None, _next_chunk)
+                    if chunk is sentinel:
+                        break
                     yield chunk
                     await asyncio.sleep(0)  # 让出控制权
 
@@ -288,18 +352,31 @@ class OpenAIRealtimeASRInferencerAsync:
             await connection.send({"type": "response.create", "response": {}})
 
             audio_done = asyncio.Event()
+            total_samples = 0
+
+            transcripts: list[str] = []
 
             async def send_audio():
+                nonlocal total_samples
                 async for chunk in audio_iter:
                     chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
                     if chunk.size == 0:
                         continue
+                    total_samples += int(chunk.size)
                     audio_base64 = self._float32_to_pcm16_base64(chunk)
-                    await connection.send({
-                        "type": "input_audio_buffer.append",
-                        "audio": audio_base64,
-                    })
+                    await connection.send(
+                        {
+                            "type": "input_audio_buffer.append",
+                            "audio": audio_base64,
+                        }
+                    )
                     await asyncio.sleep(0.01)
+                duration_s = audio_duration_seconds(total_samples, self.sample_rate)
+                logger.info(
+                    "ASR input audio duration_s=%.3f sample_rate=%d",
+                    duration_s,
+                    self.sample_rate,
+                )
                 await connection.send({"type": "input_audio_buffer.commit"})
                 audio_done.set()
 
@@ -311,12 +388,14 @@ class OpenAIRealtimeASRInferencerAsync:
 
                     if event_type == "response.audio_transcript.delta":
                         # 每次返回独立的文本块
+                        transcripts.append(event.delta)
                         yield event.delta
 
                     elif event_type == "response.audio_transcript.done":
                         break
 
                     elif event_type == "response.text.delta":
+                        transcripts.append(event.delta)
                         yield event.delta
 
                     elif event_type == "response.text.done":
@@ -334,6 +413,14 @@ class OpenAIRealtimeASRInferencerAsync:
                     await send_task
                 except asyncio.CancelledError:
                     pass
+
+            full_text = "".join(transcripts)
+            output_preview, output_len = format_text_for_log(full_text)
+            logger.info(
+                "ASR output text_len=%d text=%s",
+                output_len,
+                output_preview,
+            )
 
 
 # 便捷别名
