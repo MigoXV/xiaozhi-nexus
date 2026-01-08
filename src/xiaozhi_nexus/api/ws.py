@@ -14,11 +14,15 @@ from xiaozhi_nexus.inferencers.stream_asr import OpenAIRealtimeASRInferencer
 from xiaozhi_nexus.inferencers.chat import OpenAIChatInferencer
 from xiaozhi_nexus.inferencers.tts import OpenAITTSInferencer
 from xiaozhi_nexus.config import get_config
+from xiaozhi_nexus.mcp.bridge import ClientToolRouter, IoTRegistry, McpClientBridge
+from xiaozhi_nexus.mcp.tools_list import tools_list
 
 router = APIRouter()
 
 
-def _create_chat_inferencer() -> OpenAIChatInferencer | None:
+def _create_chat_inferencer(
+    tool_router: ClientToolRouter | None = None,
+) -> OpenAIChatInferencer | None:
     """
     从全局配置创建 Chat 推理器
 
@@ -31,6 +35,12 @@ def _create_chat_inferencer() -> OpenAIChatInferencer | None:
     if not api_key:
         return None
 
+    tools_provider = None
+    tool_executor = None
+    if tool_router:
+        tools_provider = lambda: tool_router.get_tools(tools_list)
+        tool_executor = tool_router.execute
+
     return OpenAIChatInferencer(
         base_url=cfg.openai.base_url,
         api_key=api_key,
@@ -40,6 +50,8 @@ def _create_chat_inferencer() -> OpenAIChatInferencer | None:
         max_history=cfg.llm.max_history,
         system_prompt=cfg.system.prompt,
         verify_ssl=cfg.openai.verify_ssl,
+        tools_provider=tools_provider,
+        tool_executor=tool_executor,
     )
 
 
@@ -103,6 +115,14 @@ def _parse_audio_params(payload: dict[str, Any]) -> AudioParams:
     )
 
 
+def _extract_device_id(payload: dict[str, Any]) -> str | None:
+    for key in ("device_id", "deviceId", "client_id", "clientId", "device", "client"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 OutgoingKind = Literal["json", "bytes"]
 
 
@@ -127,6 +147,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     encoder = OpusEncoder(sample_rate=24000, channels=1, frame_duration_ms=20)
 
     session: StreamSession | None = None
+    device_id: str | None = None
+    session_id = ""
+    mcp_bridge: McpClientBridge | None = None
+    iot_registry: IoTRegistry | None = None
+    tool_router = ClientToolRouter()
+    mcp_task: asyncio.Task | None = None
 
     async def sender_loop() -> None:
         while True:
@@ -181,9 +207,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         channels=audio_params.channels,
                         frame_size=audio_params.frame_size,
                     )
+                    if not device_id:
+                        device_id = _extract_device_id(payload)
+                    session_id = str(payload.get("session_id") or device_id or "")
                     publish_json(
                         {"type": "hello", "transport": "websocket", "version": 1}
                     )
+                    features = payload.get("features") or {}
+                    if features.get("mcp") and not mcp_bridge:
+                        mcp_bridge = McpClientBridge(
+                            send_json=publish_json,
+                            loop=loop,
+                            session_id=session_id,
+                        )
+                        tool_router.attach_mcp(mcp_bridge)
+                        mcp_task = asyncio.create_task(
+                            mcp_bridge.initialize_and_refresh_tools()
+                        )
+                    if features.get("iot") and not iot_registry:
+                        iot_registry = IoTRegistry(
+                            send_json=publish_json,
+                            loop=loop,
+                            session_id=session_id,
+                        )
+                        tool_router.attach_iot(iot_registry)
                     continue
 
                 if typ == "listen":
@@ -204,7 +251,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                                 asr_inferencer=_create_asr_inferencer(
                                     audio_params.sample_rate
                                 ),
-                                chat_inferencer=_create_chat_inferencer(),
+                                chat_inferencer=_create_chat_inferencer(tool_router),
                                 tts=_create_tts_inferencer(encoder.sample_rate),
                                 encoder=encoder,
                                 allow_interrupt=cfg.system.allow_interrupt,
@@ -219,6 +266,31 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                             session.stop()
                             session = None
                         continue
+
+                if typ == "mcp":
+                    if not mcp_bridge:
+                        mcp_bridge = McpClientBridge(
+                            send_json=publish_json,
+                            loop=loop,
+                            session_id=session_id,
+                        )
+                        tool_router.attach_mcp(mcp_bridge)
+                        mcp_task = asyncio.create_task(
+                            mcp_bridge.initialize_and_refresh_tools()
+                        )
+                    mcp_bridge.handle_message(payload)
+                    continue
+
+                if typ == "iot":
+                    if not iot_registry:
+                        iot_registry = IoTRegistry(
+                            send_json=publish_json,
+                            loop=loop,
+                            session_id=session_id,
+                        )
+                        tool_router.attach_iot(iot_registry)
+                    iot_registry.handle_update(payload)
+                    continue
 
                 continue
 
@@ -236,6 +308,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     finally:
         if session:
             session.stop()
+        if mcp_task:
+            mcp_task.cancel()
+            try:
+                await mcp_task
+            except (asyncio.CancelledError, Exception):
+                pass
         sender_task.cancel()
         try:
             await sender_task

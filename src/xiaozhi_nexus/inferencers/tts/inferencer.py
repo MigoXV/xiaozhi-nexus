@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import wave
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
@@ -9,7 +10,11 @@ import numpy as np
 import httpx
 from openai import OpenAI
 
+from ..utils import audio_duration_seconds
+
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,6 +88,13 @@ class OpenAITTSInferencer:
         if target_rate != sample_rate:
             pcm = self._resample_audio(pcm, sample_rate, target_rate)
             sample_rate = target_rate
+
+        duration_s = audio_duration_seconds(int(pcm.shape[0]), sample_rate)
+        logger.info(
+            "TTS output audio duration_s=%.3f sample_rate=%d",
+            duration_s,
+            sample_rate,
+        )
 
         for chunk in self._chunk_audio(pcm, sample_rate):
             yield chunk
